@@ -5,7 +5,8 @@ import asyncio
 from fastapi import FastAPI, Request, HTTPException
 from starlette.responses import Response
 
-PROXY_FILE = "proxies.txt"
+# === KONFIGURASI ===
+PROXY_SOURCE_URL = "https://raw.githubusercontent.com/gunturyogatama404/proxy-listhh/refs/heads/main/proxies.txt"
 USERNAME = "admin"
 PASSWORD = "password"
 TIMEOUT = 10
@@ -14,7 +15,7 @@ LIVE_PROXIES = []
 
 app = FastAPI()
 
-# === AUTH VALIDATOR ===
+# === AUTENTIKASI ===
 def auth_valid(auth: str):
     try:
         scheme, encoded = auth.split()
@@ -32,18 +33,26 @@ async def check_proxy(proxy):
     except:
         return None
 
+async def fetch_proxies_from_url():
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(PROXY_SOURCE_URL)
+            return [line.strip() for line in r.text.splitlines() if line.strip()]
+    except Exception as e:
+        print(f"❌ Gagal mengambil proxies dari URL: {e}")
+        return []
+
 async def filter_live_proxies():
-    with open(PROXY_FILE, "r") as f:
-        raw_proxies = [line.strip() for line in f if line.strip()]
-    tasks = [check_proxy(p) for p in raw_proxies]
+    proxies = await fetch_proxies_from_url()
+    tasks = [check_proxy(p) for p in proxies]
     results = await asyncio.gather(*tasks)
     return list(filter(None, results))
 
-# === LOAD PROXIES ON STARTUP ===
+# === LOAD ON STARTUP ===
 @app.on_event("startup")
 async def load_proxies():
     global LIVE_PROXIES
-    print("🔍 Mengecek proxy aktif...")
+    print("🔍 Mengambil & mengecek proxy aktif...")
     LIVE_PROXIES = await filter_live_proxies()
     if not LIVE_PROXIES:
         print("❌ Tidak ada proxy aktif ditemukan!")
@@ -55,15 +64,12 @@ async def load_proxies():
 async def proxy(path: str, request: Request):
     global LIVE_PROXIES
 
-    # AUTH CHECK
     if "authorization" not in request.headers or not auth_valid(request.headers["authorization"]):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # NO ACTIVE PROXY
     if not LIVE_PROXIES:
         raise HTTPException(status_code=503, detail="No live proxies available.")
 
-    # ROTATE PROXY
     proxy = random.choice(LIVE_PROXIES)
     try:
         url = str(request.url)
